@@ -1,11 +1,16 @@
+// src/main/java/com/snoopypupser/oneblockisland/OneblockIslandPlacer.java
 package com.snoopypupser.oneblockisland;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -20,15 +25,15 @@ public class OneblockIslandPlacer {
 
     private static final String NBT_KEY = "introcutscene_played";
 
+    // Absolute Weltkoordinaten des Redstone-Block-Markers in der island.nbt
+    private static final BlockPos ONEBLOCK_POS = new BlockPos(21, 90, 12);
+
     @SubscribeEvent
     public static void onWorldLoad(LevelEvent.Load event) {
         if (!(event.getLevel() instanceof ServerLevel level)) return;
-
         if (!level.dimension().equals(ServerLevel.OVERWORLD)) return;
-
         if (!(level.getChunkSource().getGenerator() instanceof OneblockChunkGenerator)) return;
 
-        // Scoreboard als persistenter Speicher
         net.minecraft.world.scores.Scoreboard scoreboard = level.getScoreboard();
         net.minecraft.world.scores.Objective objective = scoreboard.getObjective("ob_placed");
 
@@ -43,11 +48,11 @@ public class OneblockIslandPlacer {
             );
         }
 
-        net.minecraft.world.scores.ScoreHolder holder = net.minecraft.world.scores.ScoreHolder.forNameOnly("island");
+        net.minecraft.world.scores.ScoreHolder holder =
+                net.minecraft.world.scores.ScoreHolder.forNameOnly("island");
         var score = scoreboard.getOrCreatePlayerScore(holder, objective);
 
         if (score.get() == 1) return;
-
         score.set(1);
 
         try {
@@ -61,41 +66,67 @@ public class OneblockIslandPlacer {
 
             CompoundTag nbt = NbtIo.readCompressed(stream,
                     net.minecraft.nbt.NbtAccounter.unlimitedHeap());
+
             StructureTemplate template = new StructureTemplate();
-            template.load(level.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BLOCK), nbt);
+            template.load(
+                    level.registryAccess().lookupOrThrow(
+                            net.minecraft.core.registries.Registries.BLOCK), nbt);
 
             BlockPos placePos = new BlockPos(0, 64, 0);
             StructurePlaceSettings settings = new StructurePlaceSettings();
             template.placeInWorld(level, placePos, placePos, settings,
                     level.getRandom(), 2);
 
-            System.out.println("[OneblockIsland] Succesfully placed!");
+            System.out.println("[OneblockIsland] Successfully placed!");
+
+            // Redstone-Marker durch OneBlock ersetzen
+            replaceMarkerWithOneblock(level);
 
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
+    private static void replaceMarkerWithOneblock(ServerLevel level) {
+        // OneBlock-Block aus der UC8_Oneblock Mod per Registry holen
+        BlockState oneBlockState = BuiltInRegistries.BLOCK
+                .getOptional(ResourceLocation.fromNamespaceAndPath("oneblockmod", "one_block"))
+                .map(b -> b.defaultBlockState())
+                .orElse(null);
+
+        if (oneBlockState == null) {
+            System.out.println("[OneblockIsland] FEHLER: oneblockmod:one_block nicht gefunden! " +
+                    "Ist die UC8_Oneblock Mod geladen?");
+            return;
+        }
+
+        BlockState current = level.getBlockState(ONEBLOCK_POS);
+
+        if (current.getBlock() == Blocks.REDSTONE_BLOCK) {
+            level.setBlock(ONEBLOCK_POS, oneBlockState, 3);
+            System.out.println("[OneblockIsland] Redstone-Block bei " + ONEBLOCK_POS +
+                    " erfolgreich durch OneBlock ersetzt.");
+        } else {
+            System.out.println("[OneblockIsland] Warnung: Kein Redstone-Block bei " +
+                    ONEBLOCK_POS + " gefunden! Gefunden: " + current.getBlock());
+        }
+    }
+
     @SubscribeEvent
     public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-
         MinecraftServer server = player.getServer();
         if (server == null) return;
 
-        // Nur in OneBlock-Welten (prüft ob der Generator ein OneblockChunkGenerator ist)
         ServerLevel overworld = server.getLevel(ServerLevel.OVERWORLD);
         if (overworld == null) return;
         if (!(overworld.getChunkSource().getGenerator() instanceof OneblockChunkGenerator)) return;
 
-        // Bereits gespielt?
         CompoundTag data = player.getPersistentData();
         if (data.getBoolean(NBT_KEY)) return;
 
-        // Flag setzen
         data.putBoolean(NBT_KEY, true);
 
-        // 40 Ticks warten damit der Spieler vollständig geladen ist
         server.tell(new net.minecraft.server.TickTask(server.getTickCount() + 40, () -> {
             if (!player.isAlive() || !player.isAddedToLevel()) return;
 
